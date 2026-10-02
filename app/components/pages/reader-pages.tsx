@@ -845,8 +845,8 @@ export function MonthlyPickPage({
         {blindDateOpen && (
           <form className="blind-date-form" onSubmit={submitBlindDate}>
             <p className="blind-date-note">
-              We’ll send the organizer your hidden book choice and preferences, plus the contact and
-              delivery details below. The title won’t be shown here.
+              We’ll email the developer your hidden book choice and preferences, plus the contact
+              and delivery details below. The title won’t be shown here.
             </p>
             <div className="form-fields">
               <label>
@@ -902,8 +902,8 @@ export function MonthlyPickPage({
                 type="checkbox"
               />
               <span>
-                I agree to send my preferences, contact details, and hidden book choice to the
-                book-club organizer for this surprise.
+                I agree to email my preferences, contact details, and hidden book choice to the
+                developer for this surprise.
               </span>
             </label>
             <button

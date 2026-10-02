@@ -64,8 +64,12 @@ For a Vercel production deployment, add these environment variables:
 - `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` from an Upstash Redis database (or Vercel's compatible `KV_REST_API_URL` and `KV_REST_API_TOKEN`). This persistently stores requests across serverless invocations.
 - `ORGANIZER_PASSWORD`, a strong password for `/organizer`.
 - `ORGANIZER_SESSION_SECRET`, an additional long, random secret (recommended).
+- `GMAIL_SMTP_USER` and `GMAIL_SMTP_APP_PASSWORD` to send Blind Date requests and reader feedback
+  directly to `emilyerskine2002@gmail.com`. Use a Gmail App Password, never your normal Gmail password.
 
 Leave `BLIND_DATE_WEBHOOK_URL` empty or remove it when using the organizer room. It is optional and only forwards the same request to an external HTTPS integration such as Zapier, Make, Slack, or email. The payload includes `requestId`, the selected `selection`, reader `preferences`, and `recipient` details. Rate limiting is in-memory per server instance.
+
+Copy `.env.example` to `.env.local` for local development and replace the Gmail App Password placeholder. `.env.local` is ignored by Git. Gmail requires 2-Step Verification before it will let you create an App Password.
 
 ## Reader data
 

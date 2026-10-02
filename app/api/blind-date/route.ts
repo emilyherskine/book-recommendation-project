@@ -15,6 +15,7 @@ import {
 import { searchOpenLibrary } from "@/app/lib/open-library";
 import { preferredPool, scoreForPreferences } from "@/app/lib/preferences";
 import { isStoreConfigured, saveRequest } from "@/app/lib/request-store";
+import { emailDeveloper, isDeveloperEmailConfigured } from "@/app/lib/developer-email";
 
 export const runtime = "nodejs";
 
@@ -131,7 +132,8 @@ function validWebhook(value: string | undefined): string | null {
 export async function POST(request: NextRequest) {
   const webhookUrl = validWebhook(process.env.BLIND_DATE_WEBHOOK_URL);
   const storing = isStoreConfigured();
-  if (!webhookUrl && !storing) {
+  const emailing = isDeveloperEmailConfigured();
+  if (!webhookUrl && !storing && !emailing) {
     return Response.json(
       { error: "Blind Date is not connected yet. Please try again later." },
       { status: 503 },
@@ -330,6 +332,35 @@ export async function POST(request: NextRequest) {
       },
     };
     if (storing) await saveRequest({ ...organizerPayload, status: "new" });
+    if (emailing) {
+      await emailDeveloper({
+        subject: `Blind Date request: ${contactName} (${requestId})`,
+        text: [
+          "New Blind Date with a Book request",
+          "",
+          `Request ID: ${requestId}`,
+          `Submitted: ${organizerPayload.createdAt}`,
+          "",
+          `Book: ${selected.title}`,
+          `Author(s): ${selected.authors.join(", ") || "Unknown"}`,
+          `Source: ${selected.source ?? "open-library"}`,
+          `Why it fits: ${preferenceMatch.join("; ") || "No match notes"}`,
+          "",
+          `Mood: ${mode}`,
+          `Genres: ${genres.join(", ") || "None selected"}`,
+          `Format: ${format}`,
+          `Length: ${length}`,
+          `Spice level: ${spiceLevel}/5`,
+          "",
+          `Reader: ${contactName}`,
+          `Email: ${contactEmail}`,
+          `Fulfillment: ${fulfillmentMethod}`,
+          shippingAddress ? `Shipping address: ${shippingAddress}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      });
+    }
     if (webhookUrl) {
       try {
         const response = await fetch(webhookUrl, {

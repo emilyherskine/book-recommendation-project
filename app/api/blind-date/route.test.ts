@@ -8,6 +8,12 @@ vi.mock("@/app/lib/request-store", () => ({
   isStoreConfigured: vi.fn(() => false),
   saveRequest: vi.fn(),
 }));
+vi.mock("@/app/lib/developer-email", () => ({
+  emailDeveloper: vi.fn(),
+  isDeveloperEmailConfigured: vi.fn(() => false),
+}));
+
+import { emailDeveloper, isDeveloperEmailConfigured } from "@/app/lib/developer-email";
 
 let ip = 0;
 const validBody = () => ({
@@ -70,6 +76,17 @@ describe("POST /api/blind-date", () => {
   it("returns 502 when the webhook fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 }));
     expect((await post(validBody())).status).toBe(502);
+  });
+
+  it("emails the developer directly when Gmail is configured", async () => {
+    vi.stubEnv("BLIND_DATE_WEBHOOK_URL", "");
+    vi.mocked(isDeveloperEmailConfigured).mockReturnValueOnce(true);
+    const response = await post(validBody());
+    expect(response.status).toBe(202);
+    expect(emailDeveloper).toHaveBeenCalledWith({
+      subject: expect.stringContaining("Reader"),
+      text: expect.stringContaining("Book: Secret Title"),
+    });
   });
 });
 

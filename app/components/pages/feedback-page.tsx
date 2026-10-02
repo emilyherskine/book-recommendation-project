@@ -6,9 +6,35 @@ import { SectionHeading } from "@/app/components/ui/reader-ui";
 export function FeedbackPage() {
   const [rating, setRating] = useState(0);
   const [submitted, setSubmitted] = useState(false);
-  function submit(event: FormEvent<HTMLFormElement>) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSubmitted(true);
+    setSubmitting(true);
+    setSubmitted(false);
+    setError("");
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    try {
+      const response = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rating,
+          note: form.get("note"),
+          useInProfile: form.get("use-in-profile") === "on",
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "We couldn’t send your feedback.");
+      setSubmitted(true);
+      formElement.reset();
+      setRating(0);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "We couldn’t send your feedback.");
+    } finally {
+      setSubmitting(false);
+    }
   }
   return (
     <>
@@ -45,12 +71,17 @@ export function FeedbackPage() {
         <label className="check-label">
           <input name="use-in-profile" type="checkbox" /> Keep this note in my reader DNA
         </label>
-        <button className="button button-primary" disabled={!rating} type="submit">
-          Send feedback <span aria-hidden="true">↗</span>
+        <button className="button button-primary" disabled={!rating || submitting} type="submit">
+          {submitting ? "Sending feedback…" : "Send feedback"} <span aria-hidden="true">↗</span>
         </button>
         {submitted && (
           <p aria-live="polite" className="file-status">
             Thank you. Your reading profile is a little more you now.
+          </p>
+        )}
+        {error && (
+          <p aria-live="polite" className="form-error">
+            {error}
           </p>
         )}
       </form>
