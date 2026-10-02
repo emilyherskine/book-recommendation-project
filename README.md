@@ -57,8 +57,16 @@ The Open Library Search API is called server-side. Genre choices are combined in
 
 ## Blind Date with a Book
 
-The server picks the book, so its title never reaches the reader's browser. Set `BLIND_DATE_WEBHOOK_URL` (an HTTPS endpoint, e.g. a Zapier/Make/Slack/email webhook) in the Vercel project's environment variables. Without it, `/api/blind-date` returns 503. The webhook receives JSON with `requestId`, the chosen `selection`, the reader's `preferences` (mood, genres, format, length, spice) and `recipient` (name, email, club pickup or shipping address). Rate limiting is in-memory per server instance.
+The server picks the book, so its title never reaches the reader's browser. The built-in organizer room at `/organizer` receives each sealed request; it is protected by `ORGANIZER_PASSWORD`.
+
+For a Vercel production deployment, add these environment variables:
+
+- `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` from an Upstash Redis database (or Vercel's compatible `KV_REST_API_URL` and `KV_REST_API_TOKEN`). This persistently stores requests across serverless invocations.
+- `ORGANIZER_PASSWORD`, a strong password for `/organizer`.
+- `ORGANIZER_SESSION_SECRET`, an additional long, random secret (recommended).
+
+Leave `BLIND_DATE_WEBHOOK_URL` empty or remove it when using the organizer room. It is optional and only forwards the same request to an external HTTPS integration such as Zapier, Make, Slack, or email. The payload includes `requestId`, the selected `selection`, reader `preferences`, and `recipient` details. Rate limiting is in-memory per server instance.
 
 ## Reader data
 
-TBR and reading-history CSV/JSON files are parsed in the browser and saved in local storage. Clearing site data in the browser removes these lists. This prototype has no shared account database, cross-device sync, or organizer dashboard yet.
+TBR and reading-history CSV/JSON files are parsed in the browser and saved in local storage. Clearing site data in the browser removes these lists. The organizer room is a separate, password-protected request queue; reader lists are not shared with it.

@@ -3,10 +3,16 @@ import {
   genreCatalog,
   modeSearchTerms,
   readingModes,
+  validFormats,
+  validLengths,
+  type BookLength,
   type OpenLibraryBook,
+  type ReadingFormat,
   type ReadingMode,
+  type ReadingPreferences,
 } from "@/app/lib/reader-data";
 import { searchOpenLibrary } from "@/app/lib/open-library";
+import { preferredPool, scoreForPreferences } from "@/app/lib/preferences";
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 24;
@@ -43,54 +49,27 @@ function rankForReader(
   mode: ReadingMode,
   profileTerms: string[],
   searchTerms: string[],
-  preferredLength: string,
-  spiceLevel: number,
+  preferences: ReadingPreferences,
 ): OpenLibraryBook[] {
   const moodTerms = termsFrom(modeSearchTerms[mode]);
-  return books
-    .map((book) => {
-      const searchable = [book.title, ...book.authors, ...book.subjects, book.firstSentence ?? ""]
-        .join(" ")
-        .toLowerCase();
-      const moodMatches = moodTerms.filter((term) => searchable.includes(term));
-      const themeMatches = themeTerms.filter((term) => searchable.includes(term));
-      const profileMatches = profileTerms.filter((term) => searchable.includes(term));
-      const searchMatches = searchTerms.filter((term) => searchable.includes(term));
-      const pageFit =
-        preferredLength === "Short (<250 pages)"
-          ? book.pageCount && book.pageCount < 250
-          : preferredLength === "Medium (250-450 pages)"
-            ? book.pageCount && book.pageCount >= 250 && book.pageCount <= 450
-            : preferredLength === "Long (450+ pages)"
-              ? book.pageCount && book.pageCount > 450
-              : false;
-      const subjects = book.subjects.join(" ").toLowerCase();
-      const lowSpice = /clean|closed door|fade to black|sweet romance/.test(subjects);
-      const highSpice = /explicit|erotic|steamy|spicy|dark romance/.test(subjects);
-      const spiceScore =
-        spiceLevel <= 1
-          ? highSpice
-            ? -8
-            : lowSpice
-              ? 3
-              : 1
-          : spiceLevel >= 4
-            ? lowSpice
-              ? -3
-              : highSpice
-                ? 4
-                : 1
-            : lowSpice || highSpice
-              ? 0
-              : 2;
-      const reasons = [
-        ...themeMatches.slice(0, 2).map((term) => `Fits your theme: ${term}`),
-        ...moodMatches.slice(0, 2).map((term) => `Your ${mode.toLowerCase()} mood: ${term}`),
-        ...profileMatches.slice(0, 2).map((term) => `Fits your reader DNA: ${term}`),
-        ...searchMatches.slice(0, 2).map((term) => `Matches your search: ${term}`),
-        ...(pageFit ? [`Fits your length preference: ${book.pageCount} pages`] : []),
-      ];
-      return {
+  const scored = books.map((book) => {
+    const searchable = [book.title, ...book.authors, ...book.subjects, book.firstSentence ?? ""]
+      .join(" ")
+      .toLowerCase();
+    const moodMatches = moodTerms.filter((term) => searchable.includes(term));
+    const themeMatches = themeTerms.filter((term) => searchable.includes(term));
+    const profileMatches = profileTerms.filter((term) => searchable.includes(term));
+    const searchMatches = searchTerms.filter((term) => searchable.includes(term));
+    const fit = scoreForPreferences(book, preferences);
+    const reasons = [
+      ...themeMatches.slice(0, 2).map((term) => `Fits your theme: ${term}`),
+      ...moodMatches.slice(0, 2).map((term) => `Your ${mode.toLowerCase()} mood: ${term}`),
+      ...profileMatches.slice(0, 2).map((term) => `Fits your reader DNA: ${term}`),
+      ...searchMatches.slice(0, 2).map((term) => `Matches your search: ${term}`),
+      ...fit.reasons,
+    ];
+    return {
+      book: {
         ...book,
         recommendationScore:
           themeMatches.length * 5 +
@@ -98,13 +77,16 @@ function rankForReader(
           profileMatches.length * 2 +
           searchMatches.length * 4 +
           (book.coverUrl ? 1 : 0) +
-          Number(Boolean(pageFit)) * 3 +
-          spiceScore,
+          fit.score,
         recommendationReasons: reasons.length
           ? reasons
           : ["A mystery selection to broaden your reading profile"],
-      };
-    })
+      },
+      fit,
+    };
+  });
+  return preferredPool(scored, (item) => item.fit, 3)
+    .map((item) => item.book)
     .sort((first, second) => (second.recommendationScore ?? 0) - (first.recommendationScore ?? 0));
 }
 
@@ -116,12 +98,19 @@ export async function GET(request: NextRequest) {
   }
 
   const userQuery = (params.get("q") ?? "").trim().slice(0, 120);
-  const preferredLength = params.get("length") ?? "Any length";
+  const requestedFormat = params.get("format") as ReadingFormat | null;
+  const requestedLength = params.get("length") as BookLength | null;
   const requestedSpice = Number(params.get("spiceLevel"));
-  const spiceLevel =
-    Number.isInteger(requestedSpice) && requestedSpice >= 0 && requestedSpice <= 5
-      ? requestedSpice
-      : 2;
+  const preferences: ReadingPreferences = {
+    format:
+      requestedFormat && validFormats.includes(requestedFormat) ? requestedFormat : "Any format",
+    length:
+      requestedLength && validLengths.includes(requestedLength) ? requestedLength : "Any length",
+    spiceLevel:
+      Number.isInteger(requestedSpice) && requestedSpice >= 1 && requestedSpice <= 5
+        ? requestedSpice
+        : 2,
+  };
   const selectedGenres = [
     ...new Set(
       params
@@ -176,8 +165,7 @@ export async function GET(request: NextRequest) {
       modeParam,
       profileTerms,
       termsFrom(userQuery),
-      preferredLength,
-      spiceLevel,
+      preferences,
     );
     result.items = result.items.slice(0, Math.min(12, result.items.length));
     for (let index = result.items.length - 1; index > 0; index -= 1) {

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import {
   genreCatalog,
+  topThemes,
   type BookLength,
   type GenreGroup,
   type LocalReadingData,
@@ -13,7 +14,8 @@ import {
   type ReadingMode,
   type RecommendationSource,
 } from "@/app/lib/reader-data";
-import { parseReadingList } from "@/app/lib/reading-list";
+import { importSummary, parseReadingList, sortImportedBooks } from "@/app/lib/reading-list";
+import { preferredPool, scoreForPreferences } from "@/app/lib/preferences";
 import {
   BookCover,
   ChoiceGroup,
@@ -22,11 +24,12 @@ import {
 } from "@/app/components/ui/reader-ui";
 
 export function ReaderDnaPage({ data }: { data: LocalReadingData }) {
-  const hasReadData = data.readingHistory.length > 0;
+  const hasReadData = data.readingHistory.length > 0 || data.tbr.length > 0;
+  const themes = topThemes(data.readingHistory, data.tbr);
   return (
     <>
       <SectionHeading
-        detail="A snapshot shaped by the books you’ve read. Add more history to refine the pattern."
+        detail="A snapshot shaped by the books you’ve read and the ones waiting on your TBR. Add more to refine the pattern."
         eyebrow="YOUR READER DNA"
         title="Your reader DNA"
       />
@@ -44,8 +47,8 @@ export function ReaderDnaPage({ data }: { data: LocalReadingData }) {
           </h2>
           <p>
             {hasReadData
-              ? `This snapshot uses ${data.readingHistory.length} books in your reading history. Add more history to refine the pattern.`
-              : "Add a reading-history file to reveal patterns in the books you enjoy."}
+              ? `This snapshot uses ${data.readingHistory.length} books you’ve read and ${data.tbr.length} on your TBR. Add more to refine the pattern.`
+              : "Upload your TBR or reading history to reveal patterns in the books you enjoy."}
           </p>
           <span className="dna-updated">STORED ONLY IN THIS BROWSER</span>
         </div>
@@ -68,6 +71,16 @@ export function ReaderDnaPage({ data }: { data: LocalReadingData }) {
               </span>
             </div>
           ))}
+          {themes.length > 0 && (
+            <>
+              <h3 className="favorites-title">Threads on your shelf</h3>
+              <ul aria-label="Most common themes" className="dna-themes">
+                {themes.map((theme) => (
+                  <li key={theme}>{theme}</li>
+                ))}
+              </ul>
+            </>
+          )}
           <h3 className="favorites-title">Your lists</h3>
           <ul className="favorite-list">
             <li>
@@ -88,7 +101,7 @@ export function ImportReadsPage({
   onImport,
 }: {
   data: LocalReadingData;
-  onImport: (source: "history" | "tbr", entries: ReadingHistoryEntry[]) => void;
+  onImport: (lists: { history: ReadingHistoryEntry[]; tbr: ReadingHistoryEntry[] }) => void;
 }) {
   const [fileName, setFileName] = useState("");
   const [message, setMessage] = useState("");
@@ -108,11 +121,11 @@ export function ImportReadsPage({
       const entries = parseReadingList(file.name, await file.text());
       if (!entries.length)
         throw new Error("No book titles were found. Check the file format and try again.");
-      onImport(source, entries);
+      const sorted = sortImportedBooks(entries, source);
       setFileName(file.name);
-      setMessage(
-        `${entries.length} books added to your ${source === "tbr" ? "TBR" : "reading history"}.`,
-      );
+      setMessage(`${importSummary(sorted)} Reading your shelf for patterns…`);
+      await onImport({ history: sorted.history, tbr: sorted.tbr });
+      setMessage(`${importSummary(sorted)} Your reader DNA has been updated.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not read this file.");
     }
@@ -120,7 +133,7 @@ export function ImportReadsPage({
   return (
     <>
       <SectionHeading
-        detail="Keep a TBR to draw your pick from, or import reading history to tune recommendations. Your lists stay in this browser."
+        detail="Upload a Goodreads or StoryGraph export and we’ll sort what you’ve read from your TBR for you. Your lists stay in this browser."
         eyebrow="YOUR BOOK LISTS"
         title="Upload books"
       />
@@ -135,7 +148,7 @@ export function ImportReadsPage({
         </div>
       </div>
       <ChoiceGroup
-        ariaLabel="Choose which list to update"
+        ariaLabel="Where should books without a read status go?"
         className="import-source-toggle"
         options={[
           { value: "tbr", label: "To be read" },
@@ -148,9 +161,11 @@ export function ImportReadsPage({
         <div aria-hidden="true" className="import-symbol">
           ⇧
         </div>
-        <h2>Upload your {source === "tbr" ? "TBR" : "reading history"}</h2>
+        <h2>Upload your reading list</h2>
         <p>
-          Choose a CSV or JSON file. We read it in this browser and keep it on this device only.
+          Choose a CSV or JSON file. Files with a read status are sorted into “read” and “to be
+          read” automatically; otherwise books go to the list chosen above. Everything stays on this
+          device.
         </p>
         <input
           accept=".csv,text/csv,.json,application/json"
@@ -215,7 +230,7 @@ function tbrRecommendations(
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((word) => word.length > 2);
-  return data.tbr
+  const scored = data.tbr
     .map((entry, index) => {
       const text = `${entry.title} ${entry.author ?? ""} ${entry.subjects.join(" ")}`.toLowerCase();
       if (queryWords.length && !queryWords.some((word) => text.includes(word))) return null;
@@ -229,24 +244,33 @@ function tbrRecommendations(
         .split(/[^a-z0-9]+/)
         .filter((word) => word.length > 3);
       const dnaMatches = dnaWords.filter((word) => text.includes(word));
+      const fit = scoreForPreferences(entry, data.preferences);
       const reasons = [
         "From your TBR",
         ...themeMatches.slice(0, 2).map((word) => `Fits your selected genres: ${word}`),
         ...moodMatches.slice(0, 2).map((word) => `Fits your ${mode.toLowerCase()} mood: ${word}`),
         ...dnaMatches.slice(0, 2).map((word) => `Matches your reading DNA: ${word}`),
+        ...fit.reasons,
       ];
       return {
-        key: `tbr:${entry.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}:${index}`,
-        title: entry.title,
-        authors: entry.author ? [entry.author] : [],
-        subjects: entry.subjects,
-        recommendationScore:
-          themeMatches.length * 5 + moodMatches.length * 2 + dnaMatches.length * 2,
-        recommendationReasons: reasons,
-        source: "tbr" as const,
+        fit,
+        book: {
+          key: `tbr:${entry.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}:${index}`,
+          title: entry.title,
+          authors: entry.author ? [entry.author] : [],
+          subjects: entry.subjects,
+          pageCount: entry.pageCount,
+          formats: entry.formats,
+          recommendationScore:
+            themeMatches.length * 5 + moodMatches.length * 2 + dnaMatches.length * 2 + fit.score,
+          recommendationReasons: reasons,
+          source: "tbr" as const,
+        },
       };
     })
-    .filter((book): book is NonNullable<typeof book> => book !== null)
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  return preferredPool(scored, (item) => item.fit)
+    .map((item) => item.book)
     .sort((first, second) => (second.recommendationScore ?? 0) - (first.recommendationScore ?? 0));
 }
 
@@ -255,6 +279,7 @@ export function MonthlyPickPage({
   mode,
   onModeSelect,
   onPreferencesChange,
+  onOpenImport,
   onReveal,
   onSelectBook,
 }: {
@@ -262,6 +287,7 @@ export function MonthlyPickPage({
   mode: ReadingMode;
   onModeSelect: (mode: ReadingMode) => void;
   onPreferencesChange: (preferences: LocalReadingData["preferences"]) => void;
+  onOpenImport: () => void;
   onReveal: () => void;
   onSelectBook: (book: OpenLibraryBook | null) => void;
 }) {
@@ -323,6 +349,9 @@ export function MonthlyPickPage({
     params.set("mood", data.dna.mood);
     params.set("pace", data.dna.pace);
     params.set("setting", data.dna.setting);
+    params.set("format", data.preferences.format);
+    params.set("length", data.preferences.length);
+    params.set("spiceLevel", String(data.preferences.spiceLevel));
     params.set(
       "favorites",
       data.tbr
@@ -421,6 +450,7 @@ export function MonthlyPickPage({
     key: Key,
     value: LocalReadingData["preferences"][Key],
   ) {
+    resetPool();
     onPreferencesChange({ ...data.preferences, [key]: value });
   }
 
@@ -474,6 +504,20 @@ export function MonthlyPickPage({
         eyebrow="THE NIGHT LIBRARY · OPEN AFTER DUSK"
         title="What calls from the shelf?"
       />
+      {data.tbr.length === 0 && data.readingHistory.length === 0 && (
+        <aside className="import-nudge">
+          <span aria-hidden="true" className="import-nudge-sigil">
+            ✧
+          </span>
+          <p>
+            <strong>Start here for better picks.</strong> Upload your Goodreads or StoryGraph export
+            and we’ll sort your read books from your TBR automatically.
+          </p>
+          <button className="button button-secondary" onClick={onOpenImport} type="button">
+            Upload my books
+          </button>
+        </aside>
+      )}
       <ModeSelector onSelect={changeMode} selected={mode} />
       <section aria-label="Book genres" className="genre-picker">
         <div className="genre-picker-heading">
@@ -582,20 +626,28 @@ export function MonthlyPickPage({
       <details className="reading-preferences">
         <summary>
           <span>Reading preferences</span>
-          <small>Format · length · spice</small>
+          <small>
+            {data.preferences.format} · {data.preferences.length} ·{" "}
+            {"🌶".repeat(data.preferences.spiceLevel)}
+          </small>
         </summary>
         <div className="preference-fields">
-          <label>Preferred reading format</label>
+          <label>How do you like to read?</label>
           <ChoiceGroup
             ariaLabel="Preferred reading format"
             className="preference-options"
-            options={(["Any format", "Print", "Ebook", "Audiobook"] as ReadingFormat[]).map(
-              (value) => ({ value, label: value }),
-            )}
+            options={(
+              [
+                ["Any format", "Any format"],
+                ["Print", "Physical book"],
+                ["Ebook", "Ebook"],
+                ["Audiobook", "Audiobook"],
+              ] as [ReadingFormat, string][]
+            ).map(([value, label]) => ({ value, label }))}
             selected={data.preferences.format}
             onSelect={(value) => updatePreference("format", value)}
           />
-          <label>Book length</label>
+          <label>Book length (page count)</label>
           <ChoiceGroup
             ariaLabel="Preferred book length"
             className="preference-options"
@@ -610,27 +662,26 @@ export function MonthlyPickPage({
             selected={data.preferences.length}
             onSelect={(value) => updatePreference("length", value)}
           />
-          <label htmlFor="spice-level">
+          <label id="spice-label">
             Spice level{" "}
             <span>
-              {
-                ["None", "Subtle", "Mild", "Warm", "Steamy", "Explicit"][
-                  data.preferences.spiceLevel
-                ]
-              }
+              {["", "Sweet", "Mild", "Warm", "Hot", "Scorching"][data.preferences.spiceLevel]}
             </span>
           </label>
-          <input
-            aria-valuetext={
-              ["None", "Subtle", "Mild", "Warm", "Steamy", "Explicit"][data.preferences.spiceLevel]
-            }
-            id="spice-level"
-            max={5}
-            min={0}
-            onChange={(event) => updatePreference("spiceLevel", Number(event.target.value))}
-            type="range"
-            value={data.preferences.spiceLevel}
-          />
+          <div aria-labelledby="spice-label" className="pepper-rating" role="group">
+            {[1, 2, 3, 4, 5].map((level) => (
+              <button
+                aria-label={`${level} out of 5 chilli peppers`}
+                aria-pressed={data.preferences.spiceLevel === level}
+                className={level <= data.preferences.spiceLevel ? "pepper pepper-on" : "pepper"}
+                key={level}
+                onClick={() => updatePreference("spiceLevel", level)}
+                type="button"
+              >
+                🌶
+              </button>
+            ))}
+          </div>
         </div>
       </details>
       {source !== "tbr" && (
@@ -714,15 +765,31 @@ export function MonthlyPickPage({
           Reveal my book <span aria-hidden="true">↗</span>
         </button>
       </div>
-      <section className="blind-date-invite">
-        <div>
-          <p className="eyebrow">LET THE ORGANIZER CHOOSE</p>
-          <h2>Blind Date with a Book</h2>
-          <p>Your picked title is sent privately to the organizer and stays hidden from you.</p>
+      <section className="blind-date-card">
+        <div className="blind-date-heading">
+          <span aria-hidden="true" className="blind-date-sigil">
+            ☾
+          </span>
+          <div>
+            <p className="eyebrow">A SEALED LETTER TO THE ORGANIZER</p>
+            <h2>Blind Date with a Book</h2>
+            <p>Share your tastes. A book is chosen in secret and wrapped as a surprise.</p>
+          </div>
         </div>
+        <ol className="blind-date-steps">
+          <li>
+            <span aria-hidden="true">I</span>Tell us your preferences
+          </li>
+          <li>
+            <span aria-hidden="true">II</span>The title stays hidden from you
+          </li>
+          <li>
+            <span aria-hidden="true">III</span>The organizer delivers your surprise
+          </li>
+        </ol>
         <button
           aria-expanded={blindDateOpen}
-          className="button button-secondary"
+          className="button button-secondary blind-date-toggle"
           onClick={() => {
             setBlindDateOpen((open) => !open);
             setBlindError("");
@@ -731,91 +798,91 @@ export function MonthlyPickPage({
         >
           {blindDateOpen ? "Close request" : "Arrange my surprise"}
         </button>
+        {blindDateOpen && (
+          <form className="blind-date-form" onSubmit={submitBlindDate}>
+            <p className="blind-date-note">
+              We’ll send the organizer your hidden book choice and preferences, plus the contact and
+              delivery details below. The title won’t be shown here.
+            </p>
+            <div className="form-fields">
+              <label>
+                Your name
+                <input
+                  autoComplete="name"
+                  onChange={(event) => setBlindName(event.target.value)}
+                  required
+                  value={blindName}
+                />
+              </label>
+              <label>
+                Email for coordination
+                <input
+                  autoComplete="email"
+                  onChange={(event) => setBlindEmail(event.target.value)}
+                  required
+                  type="email"
+                  value={blindEmail}
+                />
+              </label>
+            </div>
+            <fieldset className="fulfillment-choice">
+              <legend>How should the organizer get the book to you?</legend>
+              <ChoiceGroup
+                ariaLabel="Book delivery preference"
+                className="preference-options"
+                options={[
+                  { value: "club pickup", label: "At a club meeting" },
+                  { value: "ship to me", label: "Ship to me" },
+                ]}
+                selected={fulfillment}
+                onSelect={setFulfillment}
+              />
+            </fieldset>
+            {fulfillment === "ship to me" && (
+              <label className="blind-address">
+                Shipping address
+                <textarea
+                  autoComplete="street-address"
+                  onChange={(event) => setShippingAddress(event.target.value)}
+                  required
+                  rows={3}
+                  value={shippingAddress}
+                />
+              </label>
+            )}
+            <label className="blind-consent">
+              <input
+                checked={blindConsent}
+                onChange={(event) => setBlindConsent(event.target.checked)}
+                required
+                type="checkbox"
+              />
+              <span>
+                I agree to send my preferences, contact details, and hidden book choice to the
+                book-club organizer for this surprise.
+              </span>
+            </label>
+            <button
+              className="button button-primary"
+              disabled={blindSubmitting || !blindConsent}
+              type="submit"
+            >
+              {blindSubmitting ? "Sealing your request…" : "Send my blind-date request"}
+              <span aria-hidden="true">✧</span>
+            </button>
+            {blindStatus && (
+              <p aria-live="polite" className="blind-success">
+                {blindStatus}
+              </p>
+            )}
+            {blindError && (
+              <p aria-live="polite" className="form-error">
+                {blindError}
+              </p>
+            )}
+          </form>
+        )}
       </section>
-      {blindDateOpen && (
-        <form className="blind-date-form" onSubmit={submitBlindDate}>
-          <p className="blind-date-note">
-            We’ll send the organizer your hidden book choice and preferences, plus the contact and
-            delivery details below. The title won’t be shown here.
-          </p>
-          <div className="form-fields">
-            <label>
-              Your name
-              <input
-                autoComplete="name"
-                onChange={(event) => setBlindName(event.target.value)}
-                required
-                value={blindName}
-              />
-            </label>
-            <label>
-              Email for coordination
-              <input
-                autoComplete="email"
-                onChange={(event) => setBlindEmail(event.target.value)}
-                required
-                type="email"
-                value={blindEmail}
-              />
-            </label>
-          </div>
-          <fieldset className="fulfillment-choice">
-            <legend>How should the organizer get the book to you?</legend>
-            <ChoiceGroup
-              ariaLabel="Book delivery preference"
-              className="preference-options"
-              options={[
-                { value: "club pickup", label: "At a club meeting" },
-                { value: "ship to me", label: "Ship to me" },
-              ]}
-              selected={fulfillment}
-              onSelect={setFulfillment}
-            />
-          </fieldset>
-          {fulfillment === "ship to me" && (
-            <label className="blind-address">
-              Shipping address
-              <textarea
-                autoComplete="street-address"
-                onChange={(event) => setShippingAddress(event.target.value)}
-                required
-                rows={3}
-                value={shippingAddress}
-              />
-            </label>
-          )}
-          <label className="blind-consent">
-            <input
-              checked={blindConsent}
-              onChange={(event) => setBlindConsent(event.target.checked)}
-              required
-              type="checkbox"
-            />
-            <span>
-              I agree to send my preferences, contact details, and hidden book choice to the
-              book-club organizer for this surprise.
-            </span>
-          </label>
-          <button
-            className="button button-primary"
-            disabled={blindSubmitting || !blindConsent}
-            type="submit"
-          >
-            {blindSubmitting ? "Sealing your request…" : "Send my blind-date request"}
-            <span aria-hidden="true">✧</span>
-          </button>
-          {blindStatus && (
-            <p aria-live="polite" className="blind-success">
-              {blindStatus}
-            </p>
-          )}
-          {blindError && (
-            <p aria-live="polite" className="form-error">
-              {blindError}
-            </p>
-          )}
-        </form>
-      )}
     </>
   );
 }

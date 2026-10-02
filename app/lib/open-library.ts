@@ -8,6 +8,7 @@ const SEARCH_FIELDS = [
   "cover_i",
   "edition_count",
   "number_of_pages_median",
+  "ebook_access",
   "subject",
   "first_sentence",
 ].join(",");
@@ -20,6 +21,7 @@ type SearchDocument = {
   cover_i?: unknown;
   edition_count?: unknown;
   number_of_pages_median?: unknown;
+  ebook_access?: unknown;
   subject?: unknown;
   first_sentence?: unknown;
 };
@@ -71,7 +73,8 @@ function normalizeDocument(document: SearchDocument): OpenLibraryBook | null {
     coverUrl: coverId ? `https://covers.openlibrary.org/b/id/${coverId}-M.jpg` : undefined,
     editionCount: asNumber(document.edition_count),
     pageCount: asNumber(document.number_of_pages_median),
-    subjects: asStringList(document.subject).slice(0, 6),
+    ebookAccess: asString(document.ebook_access),
+    subjects: asStringList(document.subject).slice(0, 25),
     firstSentence,
   };
 }

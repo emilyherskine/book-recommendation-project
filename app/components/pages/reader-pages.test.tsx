@@ -45,7 +45,9 @@ describe("reader pages", () => {
     const file = new File(["Title,Author\nRebecca,du Maurier"], "tbr.csv", { type: "text/csv" });
     Object.defineProperty(file, "text", { value: async () => "Title,Author\nRebecca,du Maurier" });
     await userEvent.upload(container.querySelector<HTMLInputElement>("#reading-file")!, file);
-    await waitFor(() => expect(onImport).toHaveBeenCalledWith("tbr", expect.any(Array)));
+    await waitFor(() =>
+      expect(onImport).toHaveBeenCalledWith({ history: [], tbr: expect.any(Array) }),
+    );
     expect(screen.getByText(/1 books added/)).toBeInTheDocument();
   });
 
@@ -55,6 +57,7 @@ describe("reader pages", () => {
         data={data}
         mode="Comfort"
         onModeSelect={() => {}}
+        onOpenImport={() => {}}
         onPreferencesChange={() => {}}
         onReveal={() => {}}
         onSelectBook={() => {}}

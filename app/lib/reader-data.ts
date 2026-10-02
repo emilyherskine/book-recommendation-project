@@ -26,6 +26,10 @@ export type ReadingHistoryEntry = {
   title: string;
   author?: string;
   subjects: string[];
+  pageCount?: number;
+  formats?: ReadingFormat[];
+  /** Set by imports whose files record read status; not used after import. */
+  shelf?: "read" | "tbr" | "skipped";
 };
 
 export type RecommendationSource = "all" | "tbr" | "open-library";
@@ -38,6 +42,14 @@ export type ReadingPreferences = {
   length: BookLength;
   spiceLevel: number;
 };
+
+export const validFormats: ReadingFormat[] = ["Any format", "Print", "Ebook", "Audiobook"];
+export const validLengths: BookLength[] = [
+  "Any length",
+  "Short (<250 pages)",
+  "Medium (250-450 pages)",
+  "Long (450+ pages)",
+];
 
 export const genreCatalog: GenreOption[] = [
   {
@@ -639,6 +651,8 @@ export type OpenLibraryBook = {
   coverUrl?: string;
   editionCount?: number;
   pageCount?: number;
+  ebookAccess?: string;
+  formats?: ReadingFormat[];
   subjects: string[];
   firstSentence?: string;
   recommendationScore?: number;
@@ -646,46 +660,109 @@ export type OpenLibraryBook = {
   source?: "tbr" | "open-library";
 };
 
-export function deriveReaderDNA(history: ReadingHistoryEntry[], preferences: ReaderDNA): ReaderDNA {
-  const tags = history
-    .flatMap((entry) => entry.subjects)
-    .join(" ")
-    .toLowerCase();
-  const titleText = history
-    .map((entry) => entry.title)
-    .join(" ")
-    .toLowerCase();
-  const text = `${tags} ${titleText}`;
-  const pick = (candidates: Array<[string, string[]]>, fallback: string) =>
-    candidates.find(([, terms]) => terms.some((term) => text.includes(term)))?.[0] ?? fallback;
+const NOISY_SUBJECTS =
+  /accessible|daisy|overdrive|in library|lending|large type|^fiction$|^general$|^novel$/;
+
+/** Weighs read books twice as heavily as TBR books; the most common signal wins. */
+export function deriveReaderDNA(
+  history: ReadingHistoryEntry[],
+  preferences: ReaderDNA,
+  tbr: ReadingHistoryEntry[] = [],
+): ReaderDNA {
+  const weighted = [
+    ...history.map((entry) => ({ entry, weight: 2 })),
+    ...tbr.map((entry) => ({ entry, weight: 1 })),
+  ].map(({ entry, weight }) => ({
+    text: `${entry.subjects.join(" ")} ${entry.title}`.toLowerCase(),
+    weight,
+  }));
+  const pick = (candidates: Array<[string, string[]]>, fallback: string) => {
+    let best = fallback;
+    let bestScore = 0;
+    for (const [label, terms] of candidates) {
+      const score = weighted.reduce(
+        (sum, { text, weight }) => (terms.some((term) => text.includes(term)) ? sum + weight : sum),
+        0,
+      );
+      if (score > bestScore) {
+        best = label;
+        bestScore = score;
+      }
+    }
+    return best;
+  };
 
   return {
     mood: pick(
       [
-        ["Atmospheric", ["gothic", "atmospheric", "haunting", "mood"]],
-        ["Clever and cozy", ["cozy", "humor", "amateur sleuth", "village"]],
-        ["Dark and twisty", ["psychological", "dark", "suspense", "thriller"]],
-        ["Character-led", ["character", "family", "domestic"]],
+        ["Atmospheric", ["gothic", "atmospheric", "haunting", "haunted", "ghost", "mood"]],
+        [
+          "Clever and cozy",
+          ["cozy", "humor", "humour", "funny", "amateur sleuth", "village", "lighthearted"],
+        ],
+        [
+          "Dark and twisty",
+          [
+            "psychological",
+            "dark",
+            "suspense",
+            "thriller",
+            "crime",
+            "murder",
+            "noir",
+            "horror",
+            "tense",
+          ],
+        ],
+        [
+          "Character-led",
+          ["character", "family", "domestic", "emotional", "contemporary", "reflective"],
+        ],
+        ["Swoony and hopeful", ["romance", "romantic", "love stor", "hopeful"]],
+        [
+          "Epic and imaginative",
+          ["fantasy", "magic", "dragon", "epic", "science fiction", "adventurous"],
+        ],
       ],
       preferences.mood,
     ),
     pace: pick(
       [
-        ["Slow-burn", ["literary", "historical", "atmospheric"]],
-        ["Page-turning", ["thriller", "suspense", "fast-paced"]],
-        ["Steady clues", ["detective", "puzzle", "classic", "mystery"]],
+        ["Slow-burn", ["literary", "historical", "atmospheric", "slow"]],
+        ["Page-turning", ["thriller", "suspense", "fast", "action", "adventurous"]],
+        ["Steady clues", ["detective", "puzzle", "classic", "mystery", "medium"]],
       ],
       preferences.pace,
     ),
     setting: pick(
       [
         ["Small towns", ["village", "small town", "country house", "cozy"]],
-        ["Historic places", ["historical", "medieval", "victorian", "history"]],
+        ["Historic places", ["historical", "medieval", "victorian", "history", "regency"]],
         ["Big cities", ["city", "urban", "new york", "london"]],
+        ["Magical worlds", ["fantasy", "magic", "fae", "dragon", "epic"]],
       ],
       preferences.setting,
     ),
   };
+}
+
+/** The most common subject tags across both lists, for showing what shaped the DNA. */
+export function topThemes(
+  history: ReadingHistoryEntry[],
+  tbr: ReadingHistoryEntry[],
+  limit = 6,
+): string[] {
+  const counts = new Map<string, number>();
+  for (const entry of [...history, ...tbr]) {
+    for (const raw of new Set(entry.subjects.map((subject) => subject.trim().toLowerCase()))) {
+      if (raw.length < 3 || raw.length > 28 || NOISY_SUBJECTS.test(raw)) continue;
+      counts.set(raw, (counts.get(raw) ?? 0) + 1);
+    }
+  }
+  return [...counts]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([subject]) => subject);
 }
 
 export const modeSearchTerms: Record<ReadingMode, string> = {

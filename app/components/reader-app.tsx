@@ -8,6 +8,7 @@ import type {
   ReadingMode,
 } from "@/app/lib/reader-data";
 import { deriveReaderDNA } from "@/app/lib/reader-data";
+import { applyEnrichment, fetchEnrichment } from "@/app/lib/enrich";
 import {
   ReaderSidebar,
   ReaderTopbar,
@@ -42,13 +43,19 @@ export default function ReaderApp() {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as Partial<LocalReadingData>;
+        const restoredHistory = Array.isArray(parsed.readingHistory) ? parsed.readingHistory : [];
+        const restoredTbr = Array.isArray(parsed.tbr) ? parsed.tbr : [];
         const restored: LocalReadingData = {
           ...defaultData,
           ...parsed,
-          dna: { ...defaultData.dna, ...parsed.dna },
-          preferences: { ...defaultData.preferences, ...parsed.preferences },
-          readingHistory: Array.isArray(parsed.readingHistory) ? parsed.readingHistory : [],
-          tbr: Array.isArray(parsed.tbr) ? parsed.tbr : [],
+          dna: deriveReaderDNA(restoredHistory, defaultData.dna, restoredTbr),
+          preferences: {
+            ...defaultData.preferences,
+            ...parsed.preferences,
+            spiceLevel: Math.min(5, Math.max(1, parsed.preferences?.spiceLevel ?? 2)),
+          },
+          readingHistory: restoredHistory,
+          tbr: restoredTbr,
         };
         startTransition(() => setData(restored));
       }
@@ -69,22 +76,36 @@ export default function ReaderApp() {
     setMenuOpen(false);
   }
 
-  function importReadingData(source: "history" | "tbr", entries: ReadingHistoryEntry[]) {
-    const nextHistory =
-      source === "history" ? [...data.readingHistory, ...entries] : data.readingHistory;
-    const nextTbr =
-      source === "tbr"
-        ? [
-            ...new Map(
-              [...data.tbr, ...entries].map((entry) => [entry.title.toLocaleLowerCase(), entry]),
-            ).values(),
-          ]
-        : data.tbr;
+  async function importReadingData(lists: {
+    history: ReadingHistoryEntry[];
+    tbr: ReadingHistoryEntry[];
+  }) {
+    const nextHistory = [...data.readingHistory, ...lists.history];
+    const nextTbr = [
+      ...new Map(
+        [...data.tbr, ...lists.tbr].map((entry) => [entry.title.toLocaleLowerCase(), entry]),
+      ).values(),
+    ];
     saveData({
       ...data,
       readingHistory: nextHistory,
       tbr: nextTbr,
-      dna: deriveReaderDNA(nextHistory, data.dna),
+      dna: deriveReaderDNA(nextHistory, defaultData.dna, nextTbr),
+    });
+    const found = await fetchEnrichment([...nextTbr, ...nextHistory]);
+    if (!found.size) return;
+    // Merge into the latest state so edits made during the lookup aren't lost.
+    setData((current) => {
+      const readingHistory = applyEnrichment(current.readingHistory, found);
+      const tbr = applyEnrichment(current.tbr, found);
+      const enriched = {
+        ...current,
+        readingHistory,
+        tbr,
+        dna: deriveReaderDNA(readingHistory, defaultData.dna, tbr),
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(enriched));
+      return enriched;
     });
   }
 
@@ -135,6 +156,7 @@ export default function ReaderApp() {
               mode={data.monthlyMode}
               onModeSelect={selectMode}
               onPreferencesChange={savePreferences}
+              onOpenImport={() => navigate("Import your reads")}
               onReveal={() => navigate("The reveal")}
               onSelectBook={setSelectedBook}
             />

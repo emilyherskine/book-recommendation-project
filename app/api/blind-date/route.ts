@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import {
   genreCatalog,
+  modeSearchTerms,
   readingModes,
+  validFormats,
+  validLengths,
   type BookLength,
   type LocalReadingData,
   type OpenLibraryBook,
@@ -10,16 +13,11 @@ import {
   type ReadingMode,
 } from "@/app/lib/reader-data";
 import { searchOpenLibrary } from "@/app/lib/open-library";
+import { preferredPool, scoreForPreferences } from "@/app/lib/preferences";
+import { isStoreConfigured, saveRequest } from "@/app/lib/request-store";
 
 export const runtime = "nodejs";
 
-const validFormats: ReadingFormat[] = ["Any format", "Print", "Ebook", "Audiobook"];
-const validLengths: BookLength[] = [
-  "Any length",
-  "Short (<250 pages)",
-  "Medium (250-450 pages)",
-  "Long (450+ pages)",
-];
 const hourlyLimit = 3;
 const requestTimes = new Map<string, number[]>();
 
@@ -43,16 +41,16 @@ function normalizeReadingList(value: unknown): LocalReadingData["tbr"] {
               .filter((subject): subject is string => typeof subject === "string")
               .slice(0, 12)
           : [],
+        pageCount:
+          typeof record.pageCount === "number" && record.pageCount > 0 && record.pageCount < 10000
+            ? Math.round(record.pageCount)
+            : undefined,
+        formats: Array.isArray(record.formats)
+          ? validFormats.filter((format) => (record.formats as unknown[]).includes(format))
+          : undefined,
       },
     ];
   });
-}
-
-function allowedLength(book: OpenLibraryBook, length: BookLength): boolean {
-  if (length === "Any length" || !book.pageCount) return true;
-  if (length === "Short (<250 pages)") return book.pageCount < 250;
-  if (length === "Medium (250-450 pages)") return book.pageCount >= 250 && book.pageCount <= 450;
-  return book.pageCount > 450;
 }
 
 function genreQuery(genres: string[]): string {
@@ -73,17 +71,36 @@ function genreQuery(genres: string[]): string {
     : "fiction OR romance OR fantasy OR mystery OR thriller OR horror";
 }
 
-function chooseRandom<T>(items: T[]): T | null {
-  return items.length ? items[Math.floor(Math.random() * items.length)] : null;
+function themeFit(
+  book: OpenLibraryBook,
+  genres: string[],
+  mode: ReadingMode,
+  query: string,
+): { score: number; reasons: string[] } {
+  const text = [book.title, ...book.authors, ...book.subjects].join(" ").toLowerCase();
+  const matchedGenres = genres.filter((genre) => {
+    const known = genreCatalog.find((item) => item.name.toLowerCase() === genre.toLowerCase());
+    return (known?.terms ?? [genre]).some((term) => text.includes(term.toLowerCase()));
+  });
+  const words = (value: string) =>
+    value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((word) => word.length > 2);
+  const moodHits = words(modeSearchTerms[mode]).filter((word) => text.includes(word));
+  const queryHits = words(query).filter((word) => text.includes(word));
+  return {
+    score: matchedGenres.length * 5 + moodHits.length * 2 + queryHits.length * 4,
+    reasons: [
+      ...matchedGenres.map((genre) => `Matches your genre: ${genre}`),
+      ...moodHits.slice(0, 2).map((word) => `Suits your ${mode.toLowerCase()} mood: ${word}`),
+      ...queryHits.slice(0, 2).map((word) => `Matches your search: ${word}`),
+    ],
+  };
 }
 
-function spiceFit(book: OpenLibraryBook, desired: number): number {
-  const subjects = book.subjects.join(" ").toLowerCase();
-  const low = /clean|closed door|fade to black|sweet romance/.test(subjects);
-  const high = /explicit|erotic|steamy|spicy|dark romance/.test(subjects);
-  if (desired <= 1) return high ? -8 : low ? 4 : 1;
-  if (desired >= 4) return low ? -4 : high ? 4 : 1;
-  return high || low ? 0 : 2;
+function chooseRandom<T>(items: T[]): T | null {
+  return items.length ? items[Math.floor(Math.random() * items.length)] : null;
 }
 
 function withinRateLimit(key: string): boolean {
@@ -100,20 +117,25 @@ function withinRateLimit(key: string): boolean {
   return true;
 }
 
+function validWebhook(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    if (new URL(value).protocol === "https:") return value;
+  } catch {
+    // Falls through to the warning below.
+  }
+  console.error("BLIND_DATE_WEBHOOK_URL must be a valid HTTPS URL; ignoring it.");
+  return null;
+}
+
 export async function POST(request: NextRequest) {
-  const webhookUrl = process.env.BLIND_DATE_WEBHOOK_URL;
-  if (!webhookUrl) {
+  const webhookUrl = validWebhook(process.env.BLIND_DATE_WEBHOOK_URL);
+  const storing = isStoreConfigured();
+  if (!webhookUrl && !storing) {
     return Response.json(
       { error: "Blind Date is not connected yet. Please try again later." },
       { status: 503 },
     );
-  }
-  try {
-    const parsedWebhook = new URL(webhookUrl);
-    if (parsedWebhook.protocol !== "https:") throw new Error("Blind Date webhook must use HTTPS.");
-  } catch {
-    console.error("BLIND_DATE_WEBHOOK_URL must be a valid HTTPS URL");
-    return Response.json({ error: "Blind Date is temporarily unavailable." }, { status: 503 });
   }
 
   const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -153,7 +175,7 @@ export async function POST(request: NextRequest) {
     !validFormats.includes(format) ||
     !validLengths.includes(length) ||
     !Number.isInteger(spiceLevel) ||
-    spiceLevel < 0 ||
+    spiceLevel < 1 ||
     spiceLevel > 5
   ) {
     return Response.json(
@@ -215,19 +237,6 @@ export async function POST(request: NextRequest) {
         .filter((book) => {
           const searchable =
             `${book.title} ${book.author ?? ""} ${book.subjects.join(" ")}`.toLowerCase();
-          const pageSubject = book.subjects.find((subject) => subject.startsWith("pages:"));
-          const lengthMatch =
-            !pageSubject ||
-            allowedLength(
-              {
-                key: "",
-                title: book.title,
-                authors: [],
-                subjects: book.subjects,
-                pageCount: Number(pageSubject.slice(6)),
-              },
-              length,
-            );
           const genreMatch =
             !genres.length ||
             genres.some((genre) => {
@@ -237,25 +246,29 @@ export async function POST(request: NextRequest) {
               const terms = known?.terms ?? [genre.toLowerCase()];
               return terms.some((term) => searchable.includes(term.toLowerCase()));
             });
-          return lengthMatch && genreMatch;
+          return genreMatch;
         })
         .map((book, index): OpenLibraryBook => ({
           key: `tbr:${book.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}:${index}`,
           title: book.title,
           authors: book.author ? [book.author] : [],
           subjects: book.subjects,
+          pageCount: book.pageCount,
+          formats: book.formats,
           source: "tbr",
         }));
       candidates.push(...tbrCandidates);
     }
 
     if (!selected && source !== "tbr") {
-      const search = await searchOpenLibrary(
-        [genreQuery(genres), query].filter(Boolean).join(" "),
+      const baseQuery = genreQuery(genres);
+      let search = await searchOpenLibrary(
+        query ? `(${baseQuery}) AND ${query}` : baseQuery,
         0,
         50,
       );
-      candidates.push(...search.items.filter((book) => allowedLength(book, length)));
+      if (!search.items.length && query) search = await searchOpenLibrary(baseQuery, 0, 50);
+      candidates.push(...search.items);
     }
     const deduplicated = [
       ...new Map(
@@ -265,14 +278,27 @@ export async function POST(request: NextRequest) {
         ]),
       ).values(),
     ];
-    const spiceRanked = deduplicated
-      .map((book) => ({ book, fit: spiceFit(book, spiceLevel) }))
-      .sort((a, b) => b.fit - a.fit);
-    const eligible = spiceRanked
-      .filter((item) => item.fit >= 0)
-      .slice(0, 20)
-      .map((item) => item.book);
-    selected = chooseRandom(eligible.length ? eligible : deduplicated);
+    const preferences = { format, length, spiceLevel };
+    const scored = deduplicated.map((book) => {
+      const fit = scoreForPreferences(book, preferences);
+      const theme = themeFit(book, genres, mode, query);
+      return {
+        book,
+        fit: {
+          ...fit,
+          score: fit.score + theme.score,
+          reasons: [...theme.reasons, ...fit.reasons],
+        },
+      };
+    });
+    const ranked = preferredPool(scored, (item) => item.fit).sort(
+      (a, b) => b.fit.score - a.fit.score,
+    );
+    // Only near-best matches stay in the draw, so genre and preferences always steer the pick.
+    const eligible = ranked.filter((item) => item.fit.score >= ranked[0].fit.score - 4);
+    const choice = chooseRandom(eligible);
+    selected = choice?.book ?? null;
+    const preferenceMatch = choice?.fit.reasons ?? [];
     if (!selected) {
       return Response.json(
         { error: "No books matched those preferences. Widen the genre or length and try again." },
@@ -282,7 +308,7 @@ export async function POST(request: NextRequest) {
 
     const requestId = randomUUID();
     const organizerPayload = {
-      type: "blind-date-book-request",
+      type: "blind-date-book-request" as const,
       requestId,
       createdAt: new Date().toISOString(),
       selection: {
@@ -293,6 +319,7 @@ export async function POST(request: NextRequest) {
         pageCount: selected.pageCount,
         coverUrl: selected.coverUrl,
         source: selected.source ?? "open-library",
+        preferenceMatch,
       },
       preferences: { mode, genres, readingFormat: format, bookLength: length, spiceLevel, source },
       recipient: {
@@ -302,13 +329,22 @@ export async function POST(request: NextRequest) {
         shippingAddress: shippingAddress || undefined,
       },
     };
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(organizerPayload),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) throw new Error(`Organizer webhook returned ${response.status}`);
+    if (storing) await saveRequest({ ...organizerPayload, status: "new" });
+    if (webhookUrl) {
+      try {
+        const response = await fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(organizerPayload),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) throw new Error(`Organizer webhook returned ${response.status}`);
+      } catch (error) {
+        // A saved request still reaches the organizer dashboard.
+        if (!storing) throw error;
+        console.error("Organizer webhook failed", error);
+      }
+    }
 
     return Response.json(
       {
