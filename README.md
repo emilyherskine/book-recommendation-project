@@ -26,6 +26,18 @@ npm run build
 
 GitHub Actions runs these checks on pushes to `main` and on pull requests.
 
+## Production deployment
+
+`.github/workflows/deploy.yml` deploys `main` to Vercel using Vercel's Next.js-aware build. Add these repository **Actions secrets** in GitHub before enabling the workflow:
+
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+
+Get the token from Vercel and the organization/project IDs from the linked Vercel project settings or its local Vercel project configuration. The workflow runs `vercel build --prod` and deploys the prebuilt output; it does not configure a static export.
+
+Do not use a GitHub Pages workflow or set `output: "export"` in `next.config.ts`. Static export cannot run the `/api/books` Route Handler, which proxies searches to Open Library. If an older Pages workflow is enabled in the GitHub repository, disable it and use the Vercel deployment workflow instead.
+
 ## Private GitHub repository
 
 Create a new repository on GitHub and set its visibility to **Private**. Do not initialize the remote with a README, since this project already has one. Then connect and push this working tree:
