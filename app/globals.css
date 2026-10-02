@@ -3714,6 +3714,70 @@ body::after {
   transform: translateY(-2px) scale(1.08);
 }
 
+.reveal-options {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0;
+  border: 1px solid #8b704a;
+  border-radius: 12px;
+  padding: 18px;
+  background: rgba(25, 22, 27, 0.7);
+}
+.reveal-options h2,
+.reveal-options p {
+  margin: 0;
+}
+.reveal-options h2 {
+  margin: 4px 0;
+  color: #f3d9a0;
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 400;
+}
+.reveal-options > div > p:last-child {
+  color: #d4c6ae;
+  font-size: 13px;
+}
+.reveal-options ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.reveal-option {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid rgba(201, 164, 95, 0.45);
+  border-radius: 8px;
+  background: rgba(15, 12, 22, 0.5);
+  padding: 12px 14px;
+  color: #eee4d1;
+  text-align: left;
+  cursor: pointer;
+}
+.reveal-option strong,
+.reveal-option small {
+  display: block;
+}
+.reveal-option small {
+  margin-top: 4px;
+  color: #c8c0b2;
+}
+.reveal-option > span:last-child {
+  align-self: center;
+  color: #dfc07e;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.reveal-option:hover,
+.reveal-option-selected {
+  border-color: #e0c07e;
+  background: rgba(104, 71, 45, 0.45);
+}
+
 .blind-date-steps {
   display: grid;
   gap: 10px;

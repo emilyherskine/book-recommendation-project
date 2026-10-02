@@ -302,6 +302,7 @@ export function MonthlyPickPage({
   const [offset, setOffset] = useState(0);
   const [requestVersion, setRequestVersion] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [showRevealOptions, setShowRevealOptions] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [blindDateOpen, setBlindDateOpen] = useState(false);
@@ -320,6 +321,7 @@ export function MonthlyPickPage({
     setError("");
     setBooks([]);
     setSelectedKey("");
+    setShowRevealOptions(false);
     onSelectBook(null);
     setOffset(0);
     setRequestVersion((version) => version + 1);
@@ -441,9 +443,12 @@ export function MonthlyPickPage({
     onSelectBook(randomBook);
   }
 
-  function loadMore() {
-    setLoading(true);
-    setOffset((current) => current + limit);
+  function widenSurprisePool() {
+    setShowRevealOptions(true);
+    if (hasMore) {
+      setLoading(true);
+      setOffset((current) => current + limit);
+    }
   }
 
   function updatePreference<Key extends keyof LocalReadingData["preferences"]>(
@@ -737,15 +742,54 @@ export function MonthlyPickPage({
             : "No books found in this theme. Try a different genre or broader detail."}
         </p>
       )}
-      {hasMore && (
+      {!loading && books.length > 1 && (
         <button
           className="button button-secondary"
           disabled={loading}
-          onClick={loadMore}
+          onClick={widenSurprisePool}
           type="button"
         >
-          Widen the surprise pool
+          {showRevealOptions && hasMore ? "Find more options" : "Widen the surprise pool"}
         </button>
+      )}
+      {showRevealOptions && books.length > 0 && (
+        <section aria-label="Book reveal options" className="reveal-options">
+          <div>
+            <p className="eyebrow">THE WHOLE SURPRISE POOL</p>
+            <h2>Choose the book you want to reveal</h2>
+            <p>Every available match is here. Your reading preferences help order the list.</p>
+          </div>
+          <ul>
+            {books.map((book) => {
+              const author = book.authors.join(", ") || "Author unknown";
+              const isSelected = selectedKey === book.key;
+              return (
+                <li key={book.key}>
+                  <button
+                    aria-pressed={isSelected}
+                    className={
+                      isSelected ? "reveal-option reveal-option-selected" : "reveal-option"
+                    }
+                    onClick={() => {
+                      setSelectedKey(book.key);
+                      onSelectBook(book);
+                    }}
+                    type="button"
+                  >
+                    <span>
+                      <strong>{book.title}</strong>
+                      <small>
+                        {author}
+                        {book.pageCount ? ` · ${book.pageCount} pages` : ""}
+                      </small>
+                    </span>
+                    <span aria-hidden="true">{isSelected ? "Selected" : "Choose"}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
       <div className="pick-actions">
         <button

@@ -25,7 +25,7 @@ describe("scoreForPreferences", () => {
     const borrowable = scoreForPreferences({ subjects: [], ebookAccess: "borrowable" }, ebook);
     const none = scoreForPreferences({ subjects: [], ebookAccess: "no_ebook" }, ebook);
     expect(borrowable.score).toBeGreaterThan(none.score);
-    expect(none.excluded).toBe(false);
+    expect(none.excluded).toBe(true);
   });
 
   it("uses the formats recorded on a TBR entry", () => {
@@ -35,6 +35,17 @@ describe("scoreForPreferences", () => {
     expect(has.score).toBeGreaterThan(lacks.score);
     expect(scoreForPreferences({ subjects: ["Audiobook"] }, audio).reasons).toContain(
       "Available as an audiobook",
+    );
+  });
+
+  it("prioritizes physical editions and excludes a known unavailable format", () => {
+    const print = { ...prefs, format: "Print" } as const;
+    const ebook = { ...prefs, format: "Ebook" } as const;
+    expect(scoreForPreferences({ subjects: [], editionCount: 3 }, print).reasons).toContain(
+      "Available as a physical book",
+    );
+    expect(scoreForPreferences({ subjects: [], ebookAccess: "no_ebook" }, ebook).excluded).toBe(
+      true,
     );
   });
 

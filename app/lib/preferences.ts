@@ -5,6 +5,7 @@ export type PreferenceCandidate = {
   subjects: string[];
   formats?: ReadingFormat[];
   ebookAccess?: string;
+  editionCount?: number;
 };
 
 export type PreferenceFit = { score: number; reasons: string[]; excluded: boolean };
@@ -42,18 +43,23 @@ function lengthFit(
 function formatFit(
   candidate: PreferenceCandidate,
   format: ReadingFormat,
-): { score: number; reason?: string } {
+): { score: number; reason?: string; excluded?: boolean } {
   if (format === "Any format") return { score: 0 };
   if (candidate.formats?.length) {
     return candidate.formats.includes(format)
       ? { score: 4, reason: `On your list as ${format === "Print" ? "a physical book" : format}` }
-      : { score: -3 };
+      : { score: -5, excluded: true };
+  }
+  if (format === "Print") {
+    return candidate.editionCount || candidate.ebookAccess !== "no_ebook"
+      ? { score: 3, reason: "Available as a physical book" }
+      : { score: 0 };
   }
   if (format === "Ebook") {
     if (candidate.ebookAccess === "borrowable" || candidate.ebookAccess === "public") {
       return { score: 3, reason: "Available to read as an ebook" };
     }
-    return candidate.ebookAccess === "no_ebook" ? { score: -3 } : { score: 0 };
+    return candidate.ebookAccess === "no_ebook" ? { score: -5, excluded: true } : { score: 0 };
   }
   if (format === "Audiobook" && /audio ?book|audible/i.test(candidate.subjects.join(" "))) {
     return { score: 4, reason: "Available as an audiobook" };
@@ -82,7 +88,10 @@ export function scoreForPreferences(
   return {
     score: length.score + format.score + spiceScore,
     reasons,
-    excluded: Boolean(length.excluded) || (spiceDistance !== undefined && spiceDistance >= 3),
+    excluded:
+      Boolean(length.excluded) ||
+      Boolean(format.excluded) ||
+      (spiceDistance !== undefined && spiceDistance >= 3),
   };
 }
 

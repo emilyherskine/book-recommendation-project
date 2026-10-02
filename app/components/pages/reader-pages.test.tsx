@@ -66,4 +66,36 @@ describe("reader pages", () => {
     await userEvent.click(screen.getByRole("button", { name: /Arrange my surprise/ }));
     expect(screen.getByRole("button", { name: /Send my blind-date request/ })).toBeDisabled();
   });
+
+  it("shows every loaded option when the surprise pool is widened", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        items: [
+          { key: "/works/1", title: "First Choice", authors: ["A. Reader"], subjects: [] },
+          { key: "/works/2", title: "Second Choice", authors: ["B. Reader"], subjects: [] },
+        ],
+        total: 2,
+        offset: 0,
+        limit: 8,
+        hasMore: false,
+      }),
+    } as Response);
+    render(
+      <MonthlyPickPage
+        data={data}
+        mode="Comfort"
+        onModeSelect={() => {}}
+        onOpenImport={() => {}}
+        onPreferencesChange={() => {}}
+        onReveal={() => {}}
+        onSelectBook={() => {}}
+      />,
+    );
+    await screen.findByRole("button", { name: "Widen the surprise pool" });
+    await userEvent.click(screen.getByRole("button", { name: "Widen the surprise pool" }));
+    expect(screen.getByRole("region", { name: "Book reveal options" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /First Choice/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Second Choice/ })).toBeInTheDocument();
+  });
 });
