@@ -28,13 +28,13 @@ GitHub Actions runs these checks on pushes to `main` and on pull requests.
 
 ## Production deployment
 
-`.github/workflows/deploy.yml` deploys `main` to Vercel using Vercel's Next.js-aware build. Add these repository **Actions secrets** in GitHub before enabling the workflow:
+`.github/workflows/deploy.yml` deploys `main` to Vercel using Vercel's Next.js-aware build. Create a Vercel access token, then open the GitHub repository's **Settings → Secrets and variables → Actions → New repository secret**. Add these three repository secrets exactly as named:
 
 - `VERCEL_TOKEN`
 - `VERCEL_ORG_ID`
 - `VERCEL_PROJECT_ID`
 
-Get the token from Vercel and the organization/project IDs from the linked Vercel project settings or its local Vercel project configuration. The workflow runs `vercel build --prod` and deploys the prebuilt output; it does not configure a static export.
+Get `VERCEL_TOKEN` from Vercel account settings. Get `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` from the linked Vercel project settings or its local Vercel project configuration. The workflow checks that all three values are present before deploying, then runs `vercel build --prod` and deploys the prebuilt output; it does not configure a static export.
 
 Do not use a GitHub Pages workflow or set `output: "export"` in `next.config.ts`. Static export cannot run the `/api/books` Route Handler, which proxies searches to Open Library. If an older Pages workflow is enabled in the GitHub repository, disable it and use the Vercel deployment workflow instead.
 
@@ -54,6 +54,10 @@ Replace the remote URL with the private repository's URL. Never commit `.env` fi
 GitHub can host the private source repository, but GitHub Pages cannot run this project as-is: the recommendation endpoint at `app/api/books/route.ts` is a Next.js server Route Handler that calls Open Library. Deploy the project to a Next.js-capable host such as Vercel and connect it to the private GitHub repository. Keep the deployment protected if the website itself must be private; a private source repository does not automatically make its deployed URL private.
 
 The Open Library Search API is called server-side. Genre choices are combined into a query; results are normalized, ranked, and shuffled before the selected book is revealed.
+
+## Blind Date with a Book
+
+The server picks the book, so its title never reaches the reader's browser. Set `BLIND_DATE_WEBHOOK_URL` (an HTTPS endpoint, e.g. a Zapier/Make/Slack/email webhook) in the Vercel project's environment variables. Without it, `/api/blind-date` returns 503. The webhook receives JSON with `requestId`, the chosen `selection`, the reader's `preferences` (mood, genres, format, length, spice) and `recipient` (name, email, club pickup or shipping address). Rate limiting is in-memory per server instance.
 
 ## Reader data
 

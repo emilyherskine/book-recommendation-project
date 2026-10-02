@@ -1,11 +1,28 @@
 import { NextRequest } from "next/server";
-import { genreCatalog, modeSearchTerms, readingModes, type OpenLibraryBook, type ReadingMode } from "@/app/lib/reader-data";
+import {
+  genreCatalog,
+  modeSearchTerms,
+  readingModes,
+  type OpenLibraryBook,
+  type ReadingMode,
+} from "@/app/lib/reader-data";
 import { searchOpenLibrary } from "@/app/lib/open-library";
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 24;
 const MAX_OFFSET = 1000;
-const MINOR_WORDS = new Set(["and", "the", "for", "with", "from", "your", "book", "books", "mystery", "mysteries"]);
+const MINOR_WORDS = new Set([
+  "and",
+  "the",
+  "for",
+  "with",
+  "from",
+  "your",
+  "book",
+  "books",
+  "mystery",
+  "mysteries",
+]);
 
 function boundedInteger(value: string | null, fallback: number, max: number): number {
   const parsed = Number(value);
@@ -26,6 +43,8 @@ function rankForReader(
   mode: ReadingMode,
   profileTerms: string[],
   searchTerms: string[],
+  preferredLength: string,
+  spiceLevel: number,
 ): OpenLibraryBook[] {
   const moodTerms = termsFrom(modeSearchTerms[mode]);
   return books
@@ -37,16 +56,53 @@ function rankForReader(
       const themeMatches = themeTerms.filter((term) => searchable.includes(term));
       const profileMatches = profileTerms.filter((term) => searchable.includes(term));
       const searchMatches = searchTerms.filter((term) => searchable.includes(term));
+      const pageFit =
+        preferredLength === "Short (<250 pages)"
+          ? book.pageCount && book.pageCount < 250
+          : preferredLength === "Medium (250-450 pages)"
+            ? book.pageCount && book.pageCount >= 250 && book.pageCount <= 450
+            : preferredLength === "Long (450+ pages)"
+              ? book.pageCount && book.pageCount > 450
+              : false;
+      const subjects = book.subjects.join(" ").toLowerCase();
+      const lowSpice = /clean|closed door|fade to black|sweet romance/.test(subjects);
+      const highSpice = /explicit|erotic|steamy|spicy|dark romance/.test(subjects);
+      const spiceScore =
+        spiceLevel <= 1
+          ? highSpice
+            ? -8
+            : lowSpice
+              ? 3
+              : 1
+          : spiceLevel >= 4
+            ? lowSpice
+              ? -3
+              : highSpice
+                ? 4
+                : 1
+            : lowSpice || highSpice
+              ? 0
+              : 2;
       const reasons = [
         ...themeMatches.slice(0, 2).map((term) => `Fits your theme: ${term}`),
         ...moodMatches.slice(0, 2).map((term) => `Your ${mode.toLowerCase()} mood: ${term}`),
         ...profileMatches.slice(0, 2).map((term) => `Fits your reader DNA: ${term}`),
         ...searchMatches.slice(0, 2).map((term) => `Matches your search: ${term}`),
+        ...(pageFit ? [`Fits your length preference: ${book.pageCount} pages`] : []),
       ];
       return {
         ...book,
-        recommendationScore: themeMatches.length * 5 + moodMatches.length * 2 + profileMatches.length * 2 + searchMatches.length * 4 + (book.coverUrl ? 1 : 0),
-        recommendationReasons: reasons.length ? reasons : ["A mystery selection to broaden your reading profile"],
+        recommendationScore:
+          themeMatches.length * 5 +
+          moodMatches.length * 2 +
+          profileMatches.length * 2 +
+          searchMatches.length * 4 +
+          (book.coverUrl ? 1 : 0) +
+          Number(Boolean(pageFit)) * 3 +
+          spiceScore,
+        recommendationReasons: reasons.length
+          ? reasons
+          : ["A mystery selection to broaden your reading profile"],
       };
     })
     .sort((first, second) => (second.recommendationScore ?? 0) - (first.recommendationScore ?? 0));
@@ -60,23 +116,46 @@ export async function GET(request: NextRequest) {
   }
 
   const userQuery = (params.get("q") ?? "").trim().slice(0, 120);
-  const selectedGenres = [...new Set(params.getAll("genre").map((genre) => genre.trim()).filter(Boolean))].slice(0, 12);
+  const preferredLength = params.get("length") ?? "Any length";
+  const requestedSpice = Number(params.get("spiceLevel"));
+  const spiceLevel =
+    Number.isInteger(requestedSpice) && requestedSpice >= 0 && requestedSpice <= 5
+      ? requestedSpice
+      : 2;
+  const selectedGenres = [
+    ...new Set(
+      params
+        .getAll("genre")
+        .map((genre) => genre.trim())
+        .filter(Boolean),
+    ),
+  ].slice(0, 12);
   const selectedGenreOptions = selectedGenres.flatMap((name) => {
     const known = genreCatalog.find((genre) => genre.name.toLowerCase() === name.toLowerCase());
-    return known ? [known] : [{ name, query: name, terms: termsFrom(name), group: "Fiction" as const }];
+    return known
+      ? [known]
+      : [{ name, query: name, terms: termsFrom(name), group: "Fiction" as const }];
   });
-  const genreTerms = [...new Set(selectedGenreOptions.flatMap((genre) => [...genre.terms, ...termsFrom(genre.name)]))];
+  const genreTerms = [
+    ...new Set(selectedGenreOptions.flatMap((genre) => [...genre.terms, ...termsFrom(genre.name)])),
+  ];
   const genreQueryTerms = selectedGenreOptions.flatMap((genre) =>
     genre.field ? [`${genre.field}:${genre.query}`] : termsFrom(genre.name),
   );
-  const profileTerms = [params.get("mood"), params.get("pace"), params.get("setting"), params.get("favorites")]
-    .flatMap(termsFrom);
+  const profileTerms = [
+    params.get("mood"),
+    params.get("pace"),
+    params.get("setting"),
+    params.get("favorites"),
+  ].flatMap(termsFrom);
   const limit = boundedInteger(params.get("limit"), DEFAULT_LIMIT, MAX_LIMIT) || DEFAULT_LIMIT;
   const offset = boundedInteger(params.get("offset"), 0, MAX_OFFSET);
 
   try {
     const broadQuery = "fiction OR romance OR fantasy OR mystery OR thriller OR horror";
-    const genreQuery = genreQueryTerms.length ? [...new Set(genreQueryTerms)].join(" OR ") : broadQuery;
+    const genreQuery = genreQueryTerms.length
+      ? [...new Set(genreQueryTerms)].join(" OR ")
+      : broadQuery;
     let result = await searchOpenLibrary(
       userQuery ? `${genreQuery} AND ${userQuery}` : genreQuery,
       offset,
@@ -91,11 +170,22 @@ export async function GET(request: NextRequest) {
     const rankingTerms = selectedGenreOptions.length
       ? genreTerms
       : [...genreTerms, "mystery", "fantasy", "romance", "thriller", "gothic", "horror", "fiction"];
-    result.items = rankForReader(result.items, rankingTerms, modeParam, profileTerms, termsFrom(userQuery));
+    result.items = rankForReader(
+      result.items,
+      rankingTerms,
+      modeParam,
+      profileTerms,
+      termsFrom(userQuery),
+      preferredLength,
+      spiceLevel,
+    );
     result.items = result.items.slice(0, Math.min(12, result.items.length));
     for (let index = result.items.length - 1; index > 0; index -= 1) {
       const randomIndex = Math.floor(Math.random() * (index + 1));
-      [result.items[index], result.items[randomIndex]] = [result.items[randomIndex], result.items[index]];
+      [result.items[index], result.items[randomIndex]] = [
+        result.items[randomIndex],
+        result.items[index],
+      ];
     }
     return Response.json(result, {
       headers: { "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400" },
