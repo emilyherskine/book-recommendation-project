@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# The Gloaming Shelf
 
-## Getting Started
+A dark-fantasy book discovery site. Readers can choose a reading mood, select one or more genres (or leave genres open), and draw a surprise pick from their device-local TBR and Open Library.
 
-First, run the development server:
+## Requirements
+
+- Node.js 20.9 or newer (Node 22 is used in CI)
+- npm
+
+## Run locally
 
 ```bash
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000. The app has no login system. Uploaded reading lists are saved in the current browser's local storage and are not synced between devices.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Validation
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run lint
+npx tsc --noEmit
+npm run build
+```
 
-## Learn More
+GitHub Actions runs these checks on pushes to `main` and on pull requests.
 
-To learn more about Next.js, take a look at the following resources:
+## Private GitHub repository
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Create a new repository on GitHub and set its visibility to **Private**. Do not initialize the remote with a README, since this project already has one. Then connect and push this working tree:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+git remote add origin https://github.com/YOUR-ACCOUNT/YOUR-PRIVATE-REPOSITORY.git
+git push -u origin main
+```
 
-## Deploy on Vercel
+Replace the remote URL with the private repository's URL. Never commit `.env` files, access tokens, or personal reading-list exports. The current app does not require API keys.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Hosting
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+GitHub can host the private source repository, but GitHub Pages cannot run this project as-is: the recommendation endpoint at `app/api/books/route.ts` is a Next.js server Route Handler that calls Open Library. Deploy the project to a Next.js-capable host such as Vercel and connect it to the private GitHub repository. Keep the deployment protected if the website itself must be private; a private source repository does not automatically make its deployed URL private.
+
+The Open Library Search API is called server-side. Genre choices are combined into a query; results are normalized, ranked, and shuffled before the selected book is revealed.
+
+## Reader data
+
+TBR and reading-history CSV/JSON files are parsed in the browser and saved in local storage. Clearing site data in the browser removes these lists. This prototype has no shared account database, cross-device sync, or organizer dashboard yet.
